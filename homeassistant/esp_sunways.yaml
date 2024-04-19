@@ -1,10 +1,38 @@
+esphome:
+  name: "esp-sunways"
+
+esp8266:
+  board: d1_mini
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "rpi9yYmaOrlCYQltnMCzASdxgl6gGS0gfWsFOqhKM6U="
+
+ota:
+  password: "12c5b2e85f282b14c1969bc4d5cfae24"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp04 Fallback Hotspot"
+    password: "IGbysuCYHJcS"
+
+captive_portal:
+
+logger:
+  #level: VERBOSE
+
 uart:
   id: mod_bus
-  tx_pin: GPIO1
-  rx_pin: GPIO3
+  tx_pin: GPIO5
+  rx_pin: GPIO4
   baud_rate: 9600
   stop_bits: 1
-
+  
 modbus:
   send_wait_time: 100ms
   id: modbus_sunways1
@@ -26,8 +54,60 @@ text_sensor:
   - platform: template
     id: working_mode_text
     name: "Working Mode Text"
+
+  - platform: template
+    id: inverter_running_status_text
+    name: "Inverter Running Status Text"  
    
 sensor:
+
+  - platform: template
+    name: "Sunways Home Consumption Now"
+    id: sunways_home_consumption_now
+    unit_of_measurement: "W"
+    device_class: "power"
+    accuracy_decimals: 0
+    filters: 
+      - throttle_average: 10s
+        
+    
+  - platform: template
+    name: "Total Power on Meter Inverted"
+    id: total_power_on_meter_inv
+    unit_of_measurement: "W"
+    device_class: "power"
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    id: inverter_running_status
+    internal: true
+    name: "Inverter Running Status"
+    address: 10105
+    register_type: holding
+    value_type: U_WORD
+    on_value:
+      then:
+        - lambda: |-
+            int state = id(inverter_running_status).state;
+            std::string text;
+            if (state == 0) {
+              text = "Wait";
+            } else if (state == 1) {
+              text = "Check";
+            } else if (state == 2) {
+              text = "On Grid";
+            } else if (state == 3) {
+              text = "Fault";
+            } else if (state == 4) {
+              text = "Flash";
+            } else if (state == 5) {
+              text = "Off Grid";
+            } else {
+              text = "UNKNOWN";
+            }
+            id(inverter_running_status_text).publish_state(text);
+
   - platform: modbus_controller
     modbus_controller_id: sunways1
     name: "Phase A Power on Meter"
@@ -36,7 +116,6 @@ sensor:
     register_type: holding
     value_type: S_DWORD
     device_class: "power"
-    accuracy_decimals: 1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
@@ -46,7 +125,6 @@ sensor:
     register_type: holding
     value_type: S_DWORD
     device_class: "power"
-    accuracy_decimals: 1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
@@ -56,70 +134,141 @@ sensor:
     register_type: holding
     value_type: S_DWORD
     device_class: "power"
-    accuracy_decimals: 1   
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    id: total_power_on_meter
     name: "Total Power on Meter"
     address: 11000
     unit_of_measurement: "W" 
     register_type: holding
     value_type: S_DWORD
     device_class: "power"
+    on_value: 
+      then:
+        - lambda: |-
+            id(total_power_on_meter_inv).publish_state(-1 * id(total_power_on_meter).state);
+            float diff = id(current_load_power).state - id(total_power_on_meter).state;
+            if (diff > 0)  id(sunways_home_consumption_now).publish_state(diff);
+
+  # still only 0
+  #- platform: modbus_controller
+  #  modbus_controller_id: sunways1
+  #  name: "Total Grid-Injection Energy on Meter"
+  #  address: 11002
+  #  unit_of_measurement: "kW" 
+  #  register_type: holding
+  #  value_type: U_DWORD
+  #  device_class: "power"
+  #  accuracy_decimals: 1
+  #  filters:
+  #  - multiply: 0.01     
+
+  # still only 0
+  #- platform: modbus_controller
+  #  modbus_controller_id: sunways1
+  #  name: "Total Purchasing Energy from Grid on Meter"
+  #  address: 11004
+  #  unit_of_measurement: "kW" 
+  #  register_type: holding
+  #  value_type: U_DWORD
+  #  device_class: "power"
+  #  filters:
+  #  - multiply: 0.01
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Total Grid-Injection Energy on Meter"
-    address: 11002
-    unit_of_measurement: "kW" 
+    name: "Grid Phase A Current"
+    address: 11010
+    unit_of_measurement: "A" 
     register_type: holding
-    value_type: U_DWORD
-    device_class: "power"
-    accuracy_decimals: 1     
+    value_type: U_WORD
+    device_class: "current"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Total Purchasing Energy from Grid on Meter"
-    address: 11004
-    unit_of_measurement: "kW" 
+    name: "Grid Phase B Current"
+    address: 11012
+    unit_of_measurement: "A" 
     register_type: holding
-    value_type: U_DWORD
-    device_class: "power"
+    value_type: U_WORD
+    device_class: "current"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    name: "Grid Phase C Current"
+    address: 11014
+    unit_of_measurement: "A" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "current"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    name: "Grid Frequency"
+    address: 11015
+    unit_of_measurement: "Hz" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "frequency"
+    accuracy_decimals: 2
+    filters:
+    - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    id: current_load_power
     name: "Current Load Power"
     address: 11016
     unit_of_measurement: "W" 
     register_type: holding
     value_type: S_DWORD
     device_class: "power"
+    on_value: 
+      then:
+        - lambda: |-
+            float diff = id(current_load_power).state - id(total_power_on_meter).state;
+            if (diff > 0)  id(sunways_home_consumption_now).publish_state(diff);
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: true
+    skip_updates: 60
     name: "Total PV Generation on that day"
     address: 11018
     unit_of_measurement: "kWh" 
     register_type: holding
     value_type: U_DWORD
     device_class: "energy"
-    accuracy_decimals: 1 
-
+    state_class: "total_increasing"
+    filters:
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
     name: "Total PV Generation from Installation"
     address: 11020
     unit_of_measurement: "kWh" 
     register_type: holding
     value_type: U_DWORD
-    device_class: "power"
+    device_class: "energy"
+    state_class: "total"
     filters:
     - multiply: 0.1
 
-
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
     name: "Total PV Generation Time from Installation"
     address: 11022
     unit_of_measurement: "H" 
@@ -129,6 +278,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: true
     name: "PV Input Total Power"
     address: 11028
     unit_of_measurement: "W" 
@@ -140,6 +290,8 @@ sensor:
 # temperature
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: true
+    skip_updates: 60
     name: "Temperature Sensor 1"
     address: 11032
     unit_of_measurement: "°C" 
@@ -152,6 +304,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
     name: "Temperature Sensor 2"
     address: 11033
     unit_of_measurement: "°C" 
@@ -166,6 +319,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: true
     name: "PV1 Voltage"
     address: 11038
     unit_of_measurement: "V" 
@@ -213,7 +367,6 @@ sensor:
     filters:
     - multiply: 0.1
 
-
   - platform: modbus_controller
     modbus_controller_id: sunways1
     name: "PV1 Input Power"
@@ -233,195 +386,53 @@ sensor:
     value_type: U_DWORD
     device_class: "power"
 
-#stats
 
+
+#backup
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Grid Injection Energy on that day[Meter]"
-    address: 41000
-    unit_of_measurement: "kWh" 
+    name: "Backup Phase A Current"
+    address: 40201
+    unit_of_measurement: "A" 
     register_type: holding
     value_type: U_WORD
-    device_class: "energy"
+    device_class: "current"
     accuracy_decimals: 1
     filters:
-    - multiply: 0.1    
-
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Grid Purchasing Energy on that day[Meter]"
-    address: 41001
-    unit_of_measurement: "kWh" 
+    name: "Backup Phase B Current"
+    address: 40211
+    unit_of_measurement: "A" 
     register_type: holding
     value_type: U_WORD
-    device_class: "energy"
+    device_class: "current"
     accuracy_decimals: 1
     filters:
-    - multiply: 0.1    
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Backup Output Energy on that day"
-    address: 41002
-    unit_of_measurement: "kWh" 
+    name: "Backup Phase C Current"
+    address: 40221
+    unit_of_measurement: "A" 
     register_type: holding
     value_type: U_WORD
-    device_class: "energy"
+    device_class: "current"
     accuracy_decimals: 1
     filters:
-    - multiply: 0.1    
+    - multiply: 0.1
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Battery Charge Energy on that day"
-    address: 41003
-    unit_of_measurement: "kWh" 
+    name: "Total Backup Power"
+    address: 40230
+    unit_of_measurement: "W" 
     register_type: holding
-    value_type: U_WORD
-    device_class: "energy"
-    state_class: "total_increasing"
-    accuracy_decimals: 1
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Battery Discharge Energy on that day"
-    address: 41004
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_WORD
-    device_class: "energy"
-    state_class: "total_increasing"
-    accuracy_decimals: 1
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "PV Generation Energy on that day"
-    address: 41005
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_WORD
-    device_class: "energy"
-    state_class: "total_increasing"
-    accuracy_decimals: 1
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Loading Energy on that day"
-    address: 41006
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_WORD
-    device_class: "energy"
-    accuracy_decimals: 1
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Energy Purchased from Grid on that day"
-    address: 41008
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_WORD
-    device_class: "energy"
-    accuracy_decimals: 1
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Energy injected to grid"
-    address: 41102
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Energy Purchased from Grid from Meter"
-    address: 41104
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Output Energy on backup port"
-    address: 41106
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Energy Charged to Battery"
-    address: 41108
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Energy Discharged from Battery"
-    address: 41110
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total PV Generation"
-    address: 41112
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Loading Energy consumed at grid side"
-    address: 41114
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
-
-  - platform: modbus_controller
-    modbus_controller_id: sunways1
-    name: "Total Energy Purchased from Grid at inverter side"
-    address: 41118
-    unit_of_measurement: "kWh" 
-    register_type: holding
-    value_type: U_DWORD
-    device_class: "energy"
-    filters:
-    - multiply: 0.1    
+    value_type: S_DWORD
+    device_class: "power"
 
 #battery
 
@@ -476,28 +487,256 @@ sensor:
     unit_of_measurement: "W" 
     register_type: holding
     value_type: S_DWORD
-    device_class: "Power"
+    device_class: "power"
 
+#stats
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "BMS Charge Imax"
-    address: 42005
-    unit_of_measurement: "A" 
+    force_new_range: true
+    skip_updates: 60
+    name: "Grid Injection Energy on that day[Meter]"
+    address: 41000
+    unit_of_measurement: "kWh" 
     register_type: holding
     value_type: U_WORD
-    device_class: "current"
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "BMS Discharge Imax"
-    address: 42006
-    unit_of_measurement: "A" 
+    skip_updates: 60
+    name: "Grid Purchasing Energy on that day[Meter]"
+    address: 41001
+    unit_of_measurement: "kWh" 
     register_type: holding
     value_type: U_WORD
-    device_class: "current"
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Backup Output Energy on that day"
+    address: 41002
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Battery Charge Energy on that day"
+    address: 41003
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Battery Discharge Energy on that day"
+    address: 41004
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "PV Generation Energy on that day"
+    address: 41005
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Loading Energy on that day"
+    address: 41006
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Energy Purchased from Grid on that day"
+    address: 41008
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_WORD
+    device_class: "energy"
+    state_class: "total_increasing"
+    accuracy_decimals: 1
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Energy injected to grid"
+    address: 41102
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Energy Purchased from Grid from Meter"
+    address: 41104
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Output Energy on backup port"
+    address: 41106
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Energy Charged to Battery"
+    address: 41108
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Energy Discharged from Battery"
+    address: 41110
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total PV Generation"
+    address: 41112
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Loading Energy consumed at grid side"
+    address: 41114
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    skip_updates: 60
+    name: "Total Energy Purchased from Grid at inverter side"
+    address: 41118
+    unit_of_measurement: "kWh" 
+    register_type: holding
+    value_type: U_DWORD
+    device_class: "energy"
+    state_class: "total"
+    filters:
+    - multiply: 0.1    
+
+# Battery
+
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    force_new_range: True
+#    name: "BMS Charge Imax"
+#    address: 42005
+#    unit_of_measurement: "A" 
+#    register_type: holding
+#    value_type: U_WORD
+#    device_class: "current"
+#    filters:
+#    - multiply: 0.1    
+
+# - platform: modbus_controller
+#   modbus_controller_id: sunways1
+#    name: "BMS Discharge Imax"
+#    address: 42006
+#    unit_of_measurement: "A" 
+#    register_type: holding
+#    value_type: U_WORD
+#    device_class: "current"
+#    filters:
+#    - multiply: 0.1    
+
+  - platform: modbus_controller
+    modbus_controller_id: sunways1
+    force_new_range: True
+    skip_updates: 6
     name: "SOC"
     address: 43000
     unit_of_measurement: "%" 
@@ -509,6 +748,8 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: True
+    skip_updates: 60
     name: "SOH"
     address: 43001
     unit_of_measurement: "%" 
@@ -520,6 +761,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: True
     name: "BMS Status"
     address: 43002
     register_type: holding
@@ -527,6 +769,8 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    force_new_range: True
+    skip_updates: 60
     name: "BMS Pack Temperature"
     address: 43003
     unit_of_measurement: "°C" 
@@ -539,6 +783,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
     name: "Max Cell Temperature"
     address: 43009
     unit_of_measurement: "°C" 
@@ -551,6 +796,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 60
     name: "Min Cell Temperature"
     address: 43011
     unit_of_measurement: "°C" 
@@ -564,6 +810,7 @@ sensor:
 number:
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 12
     name: "Grid Injection Power Limit Switch"
     address: 25100
     # register_type: holding
@@ -575,6 +822,7 @@ number:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 12
     name: "Grid Injection Power Limit Setting"
     address: 25103
     # register_type: holding
@@ -586,6 +834,7 @@ number:
 
   - platform: modbus_controller
     modbus_controller_id: sunways1
+    skip_updates: 12
     id: working_mode
     name: "Working Mode Setting"
     address: 50000
@@ -606,11 +855,109 @@ number:
             id(working_mode_text).publish_state(text);
 
 
+ # - platform: modbus_controller
+ #   modbus_controller_id: sunways1
+ #   name: "Off-grid Frequency Setting"
+ #   address: 50005
+ #   # register_type: holding
+ #   value_type: U_WORD
+ #   device_class: frequency
+ #   unit_of_measurement: Hz
+
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_esp_ups_function_switch
+#    name: "EPS UPS Function Switch"
+#    address: 50001
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    min_value: 0
+#    max_value: 1
+#    step: 1
+#
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_off_grid_asymetric_output_function_switch
+#    name: "Off Grid Asymetric Output Function Switch"
+#    address: 50006
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    min_value: 0
+#    max_value: 1
+#    step: 1
+#
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_peak_load_shifting_switch
+#    name: "Peak Load Shifting Switch"
+#    address: 50007
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    min_value: 0
+#    max_value: 1
+#    step: 1
+#
+#  # 0 = PV output priority, 1 = Battery output priority
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_priority_power_output_setting
+#    name: "Priority Power Output Setting"
+#    address: 50210
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    min_value: 0
+#    max_value: 1
+#    step: 1
+#
+#  # 0.01 kW
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_pv_power_setting
+#    name: "PV Power Setting kW"
+#    address: 50211
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    #min_value: 0
+#    #max_value: 10
+#    #step: 0.01
+#    #multiply: 100
+
+  # 0.1 %
   - platform: modbus_controller
     modbus_controller_id: sunways1
-    name: "Off-grid Frequency Setting"
-    address: 50005
+    skip_updates: 12
+    id: esp04_on_grid_battery_dod
+    name: "On Grid Battery Battery DOD"
+    address: 52503
     # register_type: holding
     value_type: U_WORD
-    device_class: frequency
-    unit_of_measurement: Hz
+    entity_category: config
+    min_value: 0
+    max_value: 100
+    step: 0.1
+    multiply: 10
+
+#  # 0.1 %
+#  - platform: modbus_controller
+#    modbus_controller_id: sunways1
+#    skip_updates: 12
+#    id: esp04_off_grid_battery_dod
+#    name: "Off Grid Battery Battery DOD"
+#    address: 52505
+#    # register_type: holding
+#    value_type: U_WORD
+#    entity_category: config
+#    min_value: 0
+#    max_value: 100
+#    step: 0.1
+#    multiply: 10
